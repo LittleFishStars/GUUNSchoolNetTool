@@ -1,21 +1,29 @@
 import os
-import shutil
+import signal
 import socket
+import sys
 import tkinter
 import urllib.parse
 import time
 from time import sleep
 
+import psutil
+import win32com.client
+
 import winshell
 import pywifi
 import requests
 import json
+import pystray
+from PIL import Image
+from pystray import MenuItem
 
 carrier_id = {
     "移动": "cmcc",
     "电信": "dx",
     "联通": "unicom",
 }
+file = psutil.Process(os.getpid()).exe()
 config_dir = os.path.expandvars(r"%APPDATA%\SchoolNetTool")
 if not os.path.exists(config_dir):
     os.makedirs(config_dir)
@@ -60,26 +68,64 @@ def check_network_connection():
         return False
 
 
+def on_connected():
+    while check_network_connection():
+        sleep(10)
+
+
 def run(password, school_id, carrier):
     while True:
         name = pywifi.PyWiFi().interfaces()[0].scan_results()[0].ssid
         if name.startswith('CMCC-GNNUN'):
             response = login(password, school_id, carrier)
+            print(response.text)
             if response.text != 'jsonpReturn({"result":1,"msg":"Portal协议认证成功！"});':
-                print(response.text)
-                time.sleep(30)
-                continue
+                match response.text:
+                    case 'jsonpReturn({"result":0,"msg":"IP: 10.16.120.151 已经在线！","ret_code":2});':
+                        on_connected()
+                    case 'jsonpReturn({"result":0,"msg":"您的统一身份认证账号密码错误，请检查账号密码","ret_code":1});':
+                        os.remove(config_file)
+                        sys.exit(1)
+                    case _:
+                        time.sleep(30)
+                        continue
             else:
-                while check_network_connection():
-                    sleep(10)
+                on_connected()
         else:
             time.sleep(10)
 
 
+def get_real_path(shortcut_path):
+    if not os.path.exists(shortcut_path):
+        return None
+
+    shell = win32com.client.Dispatch("WScript.Shell")
+    shortcut = shell.CreateShortCut(shortcut_path)
+
+    return shortcut.Targetpath
+
+
 def main(config):
+    if get_real_path(shortcut_file) != file:
+        os.remove(shortcut_file)
+        create_shortcut(file, shortcut_file)
+
     password = urllib.parse.quote(config["password"])
     school_id = urllib.parse.quote(config["school_id"])
     carrier = urllib.parse.quote(carrier_id[config["carrier"]])
+
+    def exit(icon, item):
+        icon.stop()
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    def reset(icon, item):
+        os.remove(config_file)
+        exit(icon, item)
+
+    menu = (MenuItem('退出', exit), MenuItem('重置', reset))
+    image = Image.open(icon_file)
+    icon = pystray.Icon("name", image, "退出程序", menu)
+    icon.run()
     run(password, school_id, carrier)
 
 
@@ -127,7 +173,7 @@ def gui():
         }
         with open(config_file, "w") as f:
             f.write(json.dumps(config))
-        create_shortcut(__file__, shortcut_file)
+        create_shortcut(file, shortcut_file)
         win.destroy()
         main(config)
 
@@ -147,4 +193,5 @@ def create_shortcut(path, from_path):
 
 
 if __name__ == '__main__':
+    print(file)
     init()
