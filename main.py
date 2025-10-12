@@ -5,6 +5,7 @@ import sys
 import tkinter
 import urllib.parse
 import time
+from threading import Thread
 from time import sleep
 
 import psutil
@@ -125,8 +126,9 @@ def main(config):
     menu = (MenuItem('退出', exit), MenuItem('重置', reset))
     image = Image.open(icon_file)
     icon = pystray.Icon("name", image, "退出程序", menu)
+    thread = Thread(target=run, args=(password, school_id, carrier))
+    thread.start()
     icon.run()
-    run(password, school_id, carrier)
 
 
 def gui():
@@ -193,5 +195,4 @@ def create_shortcut(path, from_path):
 
 
 if __name__ == '__main__':
-    print(file)
     init()
