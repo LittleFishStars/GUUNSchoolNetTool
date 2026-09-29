@@ -1,5 +1,5 @@
 ﻿# ============================================================
-#  校园网自动连接工具 (ePortal)   —   by opencode
+#  校园网自动连接工具 (ePortal)   —   by opencode   [v1.0.0]
 #  基于同学源码修正协议，解决：记住密码 / 回车连接 / 断线休眠自动重连
 # ============================================================
 Add-Type -AssemblyName System.Windows.Forms
@@ -42,6 +42,11 @@ public class AppIdHelper {
 # 关键：把控制台输出编码设为 UTF-8，否则 netsh 返回的中文 WiFi 名会乱码
 # （乱码会导致中文热点名扫到了却认不出来）
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+
+# ---------------- 版本号 ----------------
+# 主目录版 与 便携版 的版本号须保持一致；日后对比两个程序显示的版本号，
+# 即可立刻看出哪个是「少改了」的旧版本。
+$script:AppVer = '1.0.0'
 
 # ---------------- 应用目录（兼容 .ps1 运行 与 .exe 运行）----------------
 $script:isExe = $false
@@ -564,7 +569,7 @@ function Update-Quote {
 # ---------------- 主窗口 ----------------
 $form = New-Object System.Windows.Forms.Form
 $script:form = $form
-$form.Text = '校园网自连'
+$form.Text = "校园网自连 v$($script:AppVer)"
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'Sizable'      # 可调整大小 / 可最大化
 $form.MaximizeBox = $true
@@ -747,6 +752,8 @@ $lblStatus.Dock = 'Top'
 $lblStatus.Height = (S 40)
 $lblStatus.ForeColor = [System.Drawing.Color]::DimGray
 $lblStatus.AutoEllipsis = $true
+# 状态行用小一号字，保证默认窗口宽度下能整行显示（如 "已联网 · ... · IP: x.x.x.x 已经在线！"）
+$lblStatus.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', (8 * $script:dpiScale))
 
 $script:lblQuote = New-Object System.Windows.Forms.Label
 $script:lblQuote.Text = Get-TodayQuote
@@ -817,7 +824,7 @@ function Toggle-Pause {
 # 网络与目标不一致时的弹窗（暂停 / 忽略 / 彻底关闭）
 function Show-MismatchDialog([string]$cur, [string]$target) {
     $dlg = New-Object System.Windows.Forms.Form
-    $dlg.Text = '校园网自连'
+    $dlg.Text = "校园网自连 v$($script:AppVer)"
     $dlg.StartPosition = 'CenterScreen'
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.MaximizeBox = $false; $dlg.MinimizeBox = $false
@@ -926,7 +933,7 @@ $btnRefresh.Add_Click({
 $ni = New-Object System.Windows.Forms.NotifyIcon
 $script:appIcon = Get-AppIcon
 $ni.Icon = $script:appIcon
-$ni.Text = '校园网自连'
+$ni.Text = "校园网自连 v$($script:AppVer)"
 $ni.Visible = $true
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 [void]$menu.Items.Add('显示主界面')

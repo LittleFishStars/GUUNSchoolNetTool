@@ -43,6 +43,12 @@ CreateObject("WScript.Shell").Run "powershell -NoProfile -ExecutionPolicy Bypass
 Invoke-ps2exe -inputFile GUUNNet.ps1 -outputFile GUUNNet.exe -iconFile GUUNNet.ico -noConsole
 ```
 
+## 版本
+
+当前版本：**v1.0.0**（窗口标题、托盘提示会显示版本号）。
+
+版本号唯一来源是 `GUUNNet.ps1` 顶部的 `$script:AppVer`；打包成 exe 时，exe 的文件版本应与它保持一致。
+
 ## 说明
 
 - 本版本与仓库中的 Python 版（`main.py`）功能对应，是另一种技术栈的实现
