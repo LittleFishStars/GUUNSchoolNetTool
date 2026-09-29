@@ -212,9 +212,39 @@ function Unprotect-Text([string]$s) {
         return [Text.Encoding]::UTF8.GetString($b)
     } catch { return '' }
 }
+# 无窗口执行外部命令
+#  1) 用 cmd 强制 UTF-8 代码页(65001) → 无论父进程有无控制台，netsh 都按 UTF-8 输出（中文不乱码）
+#  2) CreateNoWindow → 不闪黑框
+#  3) 严格 UTF-8 解码，非法字节则回退 GBK（双保险）
+function Invoke-Exe([string]$file, [string]$arguments) {
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $env:ComSpec          # cmd.exe
+        $psi.Arguments = '/c chcp 65001>nul & ' + $file + ' ' + $arguments
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $p = [System.Diagnostics.Process]::Start($psi)
+        $ms = New-Object System.IO.MemoryStream
+        $p.StandardOutput.BaseStream.CopyTo($ms)
+        $p.StandardError.ReadToEnd() | Out-Null
+        $p.WaitForExit()
+        $bytes = $ms.ToArray()
+        try {
+            # 严格模式：遇到非法 UTF-8 字节会抛异常
+            $strict = New-Object System.Text.UTF8Encoding($false, $true)
+            return $strict.GetString($bytes)
+        } catch {
+            # 回退：系统 ANSI(中文=GBK)
+            return [System.Text.Encoding]::GetEncoding(936).GetString($bytes)
+        }
+    } catch { return '' }
+}
 function Get-CurSSID {
     try {
-        foreach ($line in (netsh wlan show interfaces 2>$null)) {
+        $txt = Invoke-Exe 'netsh.exe' 'wlan show interfaces'
+        foreach ($line in ($txt -split "`r?`n")) {
             if ($line -match '^\s*SSID\s*:\s*(.+?)\s*$') { return $Matches[1] }
         }
     } catch {}
@@ -241,7 +271,8 @@ function Get-CurSSIDStable {
 function Get-WlanProfiles {
     $names = @()
     try {
-        foreach ($line in (netsh wlan show profiles 2>$null)) {
+        $txt = Invoke-Exe 'netsh.exe' 'wlan show profiles'
+        foreach ($line in ($txt -split "`r?`n")) {
             $m = [regex]::Match($line, ':\s*(.+)$')
             if ($m.Success) {
                 $n = $m.Groups[1].Value.Trim()
@@ -255,7 +286,8 @@ function Get-WlanProfiles {
 function Get-VisibleSsids {
     $names = @()
     try {
-        foreach ($line in (netsh wlan show networks 2>$null)) {
+        $txt = Invoke-Exe 'netsh.exe' 'wlan show networks'
+        foreach ($line in ($txt -split "`r?`n")) {
             # 只匹配 "SSID N : 名称"，不匹配 "BSSID N : ..."
             $m = [regex]::Match($line, '^\s*SSID\s+\d+\s*:\s*(.+?)\s*$')
             if ($m.Success) {
@@ -269,9 +301,8 @@ function Get-VisibleSsids {
 # 连接到指定的 WiFi 配置文件
 function Connect-ToSsid([string]$name) {
     try {
-        $cmdline = 'netsh wlan connect name="' + $name + '"'
-        $r = cmd /c $cmdline 2>&1
-        return ($r -join ' ')
+        $safe = $name -replace '"', ''
+        return (Invoke-Exe 'netsh.exe' ('wlan connect name="' + $safe + '"'))
     } catch { return '' }
 }
 # 等待（期间保持界面响应）
