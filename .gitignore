@@ -2,3 +2,11 @@
 .venv
 build
 dist
+
+# 运行本机生成的文件（不应提交）
+config.json
+log.txt
+GUUNNet-Silent.vbs
+
+# 打包产物
+*.exe
