@@ -1,5 +1,5 @@
 ﻿# ============================================================
-#  校园网自动连接工具 (ePortal)   —   by opencode   [v1.0.0]
+#  校园网自动连接工具 (ePortal)   —   by opencode   [v1.0.6]
 #  基于同学源码修正协议，解决：记住密码 / 回车连接 / 断线休眠自动重连
 # ============================================================
 Add-Type -AssemblyName System.Windows.Forms
@@ -46,7 +46,7 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 # ---------------- 版本号 ----------------
 # 主目录版 与 便携版 的版本号须保持一致；日后对比两个程序显示的版本号，
 # 即可立刻看出哪个是「少改了」的旧版本。
-$script:AppVer = '1.0.0'
+$script:AppVer = '1.0.6'
 
 # ---------------- 应用目录（兼容 .ps1 运行 与 .exe 运行）----------------
 $script:isExe = $false
@@ -170,8 +170,9 @@ $PollFastSec = 2      # 校园网但未登录 / 正在切换 → 快速
 $PollSlowSec = 10     # 已联网稳定 / 非校园网     → 慢速省电
 $LoginCooldownSec = 3
 
-# 运营商 → ePortal 后缀（与同学源码一致）
-$CarrierMap = [ordered]@{ '移动' = 'cmcc'; '电信' = 'dx'; '联通' = 'unicom' }
+# 运营商 → ePortal 账号后缀（取自校园 Dr.COM 门户 carrier 配置）
+#   电信 = '@dx'   联通 = '@lt'   移动 = 无后缀（直接用学号）
+$CarrierSuffix = [ordered]@{ '电信' = '@dx'; '联通' = '@lt'; '移动' = '' }
 
 # ---------------- 单实例 + 再次启动时唤出已有窗口 ----------------
 # 命名事件：用于让"已在运行的实例"把窗口显示到前台
@@ -303,10 +304,29 @@ function Get-VisibleSsids {
     } catch {}
     return ($names | Sort-Object -Unique)
 }
+# 自愈：把指定 WiFi 配置文件设为"自动连接"
+# （校园网 profile 常是"手动连接"，导致 Windows 开机不自动连 → 这里顺手纠正）
+function Set-ProfileAuto([string]$name) {
+    if ([string]::IsNullOrEmpty($name)) { return }
+    try {
+        $safe = $name -replace '"', ''
+        $r = Invoke-Exe 'netsh.exe' ('wlan set profileparameter name="' + $safe + '" connectionmode=auto')
+        if ($r -match 'successfully|成功') { Write-Log ('自愈: 已将 [' + $safe + '] 设为自动连接') }
+    } catch {}
+}
+# 扫描所有校园网配置(CMCC-GNNUN*)，批量设为自动连接
+function Repair-CampusProfilesAuto {
+    try {
+        foreach ($p in Get-WlanProfiles) {
+            if ($p -like ('*' + $SsidKeyword + '*')) { Set-ProfileAuto $p }
+        }
+    } catch {}
+}
 # 连接到指定的 WiFi 配置文件
 function Connect-ToSsid([string]$name) {
     try {
         $safe = $name -replace '"', ''
+        Set-ProfileAuto $safe                                   # 先自愈为"自动连接"
         return (Invoke-Exe 'netsh.exe' ('wlan connect name="' + $safe + '"'))
     } catch { return '' }
 }
@@ -424,10 +444,10 @@ function Invoke-PortalLogin([string]$schoolId, [string]$pass, [string]$carrierNa
     if ([string]::IsNullOrEmpty($schoolId) -or [string]::IsNullOrEmpty($pass)) {
         return @{ ok = $false; authfail = $false; msg = '学号或密码为空' }
     }
-    $carrier = $CarrierMap[$carrierName]
-    if (-not $carrier) { $carrier = 'dx' }
+    $suffix = '@dx'                                     # 未知运营商 → 默认电信
+    if ($CarrierSuffix.Contains($carrierName)) { $suffix = [string]$CarrierSuffix[$carrierName] }
     $ip = Get-LocalIP
-    $acct = ',0,' + $schoolId + '@' + $carrier          # 关键：账号格式
+    $acct = ',0,' + $schoolId + $suffix                 # 关键：账号格式 ,0,学号@后缀（移动无后缀）
     $url = $PortalBase +
            '?callback=jsonpReturn' +
            '&user_account=' + [Uri]::EscapeDataString($acct) +
@@ -463,7 +483,7 @@ function Invoke-PortalLogin([string]$schoolId, [string]$pass, [string]$carrierNa
 # ---------------- 配置读写 ----------------
 $script:cfg = [ordered]@{
     schoolId = ''; passEnc = ''; carrier = '电信'; remember = $true; auto = $true; boot = $false
-    targetSsid = ''; switchNetwork = $true
+    targetSsid = ''; switchNetwork = $true; noExitConfirm = $false
 }
 function Load-Config {
     if (Test-Path -LiteralPath $CfgFile) {
@@ -486,6 +506,7 @@ $script:lastSwitchAt = [datetime]::MinValue
 $script:paused = $false                            # 暂停状态（仅本次运行有效）
 $script:mismatchPrompted = $false                  # "目标不符"提示是否已弹过
 $script:mismatchLastSsid = ''                      # 上次弹窗时的当前网络
+$script:authPaused = $false                        # 认证失败后暂停自动重试，等用户处理
 
 # ---------------- 开机自启 ----------------
 function Set-Autostart([bool]$on) {
@@ -724,6 +745,65 @@ $btnLog.Add_Click({
     } catch {}
 })
 
+# 彻底关闭确认框（带"不再提示"勾选）。返回 $true=确认退出
+function Show-ExitConfirm {
+    $dlg = New-Object System.Windows.Forms.Form
+    $dlg.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None   # 关闭自动缩放，避免与手动 DPI 缩放叠加导致排版错乱
+    $dlg.Text = "校园网自连 v$($script:AppVer)"
+    $dlg.StartPosition = 'CenterScreen'
+    $dlg.FormBorderStyle = 'FixedDialog'
+    $dlg.MaximizeBox = $false; $dlg.MinimizeBox = $false
+    $dlg.TopMost = $true
+    $dlg.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', (9 * $script:dpiScale))
+    $dlg.ClientSize = New-Object System.Drawing.Size((S 460), (S 168))
+
+    $lbl = New-Object System.Windows.Forms.Label
+    $lbl.Location = New-Object System.Drawing.Point((S 20), (S 16))
+    $lbl.Size = New-Object System.Drawing.Size((S 420), (S 44))
+    $lbl.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', (9 * $script:dpiScale))
+    $lbl.Text = '彻底关闭？程序将退出，本次不再自动重连。' + "`n" +
+                '（下次开机仍会自动启动并登录）'
+    $dlg.Controls.Add($lbl)
+
+    $chkNoMore = New-Object System.Windows.Forms.CheckBox
+    $chkNoMore.Text = '不再提示（以后点「彻底关闭」直接退出）'
+    $chkNoMore.Location = New-Object System.Drawing.Point((S 20), (S 76))
+    $chkNoMore.Size = New-Object System.Drawing.Size((S 420), (S 22))
+    $chkNoMore.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', (9 * $script:dpiScale))
+    $dlg.Controls.Add($chkNoMore)
+
+    $bYes = New-Object System.Windows.Forms.Button
+    $bYes.Text = '是(Y)'
+    $bYes.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', (9 * $script:dpiScale))
+    $bYes.Location = New-Object System.Drawing.Point((S 210), (S 116))
+    $bYes.Size = New-Object System.Drawing.Size((S 110), (S 34))
+    $bYes.DialogResult = 'Yes'
+
+    $bNo = New-Object System.Windows.Forms.Button
+    $bNo.Text = '否(N)'
+    $bNo.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', (9 * $script:dpiScale))
+    $bNo.Location = New-Object System.Drawing.Point((S 330), (S 116))
+    $bNo.Size = New-Object System.Drawing.Size((S 110), (S 34))
+    $bNo.DialogResult = 'No'
+
+    $dlg.Controls.AddRange(@($bYes, $bNo))
+    $dlg.AcceptButton = $bYes
+    $dlg.CancelButton = $bNo
+
+    $r = $dlg.ShowDialog()
+    $noMore = $chkNoMore.Checked
+    $dlg.Dispose()
+    if ($r -eq 'Yes') {
+        if ($noMore) {
+            $script:cfg.noExitConfirm = $true
+            Save-Config
+            Write-Log '用户勾选"不再提示彻底关闭确认框"'
+        }
+        return $true
+    }
+    return $false
+}
+
 # 彻底关闭（杀死后台进程）
 $btnExit = New-Object System.Windows.Forms.Button
 $btnExit.Text = '彻底关闭'
@@ -733,10 +813,10 @@ $btnExit.FlatStyle = 'Flat'
 $btnExit.ForeColor = [System.Drawing.Color]::FromArgb(200, 40, 40)
 $btnExit.Font = $script:btnFont
 $btnExit.Add_Click({
-    $ans = [System.Windows.Forms.MessageBox]::Show(
-        '彻底关闭？程序将退出，开机/断网时不再自动连接。' + "`n" + '（下次开机仍会自动启动）',
-        '校园网自连', 'YesNo', 'Question')
-    if ($ans -ne 'Yes') { return }
+    # 若已勾选"不再提示"，则直接退出，不再弹确认框
+    if (-not [bool]$script:cfg.noExitConfirm) {
+        if (-not (Show-ExitConfirm)) { return }
+    }
     Stop-App
 })
 
@@ -952,6 +1032,7 @@ $ni.Add_DoubleClick({ $form.Show(); $form.WindowState='Normal'; $form.Activate()
 function Connect-Now {
     if ($script:busy) { return }
     $script:busy = $true
+    $script:authPaused = $false        # 用户主动点「连接」→ 解除"认证失败暂停"
     try {
         $user = $txtUser.Text.Trim()
         $pass = $txtPass.Text
@@ -959,15 +1040,8 @@ function Connect-Now {
         if ([string]::IsNullOrEmpty($user) -or [string]::IsNullOrEmpty($pass)) {
             Set-Status '请先填写学号和密码' 'Red'; return
         }
-        if ($chkRemember.Checked) {
-            $script:cfg.schoolId = $user
-            $script:cfg.passEnc = Protect-Text $pass
-            $script:cfg.remember = $true
-        } else {
-            $script:cfg.remember = $false
-            $script:cfg.passEnc = ''
-            $script:cfg.schoolId = $user
-        }
+        # 先保存"非密码"设置；密码等登录成功后再保存，避免把打错的密码写进去存下来
+        $script:cfg.schoolId = $user
         $script:cfg.carrier = $carrier
         $script:cfg.auto = $chkAuto.Checked
         $script:cfg.boot = $chkBoot.Checked
@@ -1029,6 +1103,29 @@ function Connect-Now {
         if ($r.ok) {
             $script:lastLoginAt = Get-Date
             $script:loginFailCount = 0        # 成功 → 清零退避
+            # 登录成功 → 此时才保存账号密码（确保存下来的密码确实能用）
+            if ($chkRemember.Checked) {
+                $script:cfg.remember = $true
+                $script:cfg.passEnc = Protect-Text $pass
+            } else {
+                $script:cfg.remember = $false
+                $script:cfg.passEnc = ''
+            }
+            # 首次登录成功（此前从没有过可用账号密码）→ 自动开启"开机自动启动"，免去用户手动勾选
+            if (-not $script:hadCredAtStart -and -not $chkBoot.Checked) {
+                $chkBoot.Checked = $true
+                $script:cfg.boot = $true
+                Set-Autostart $true
+                Write-Log '首次登录成功 → 自动开启开机自动启动'
+                try {
+                    [System.Windows.Forms.MessageBox]::Show(
+                        '已自动开启「开机自动启动」：以后每次开机都会自动连接到校园网。' + "`n" +
+                        '（如不需要，取消勾选「开机自动启动」即可）',
+                        '校园网自连', 'OK', 'Information') | Out-Null
+                } catch {}
+            }
+            $script:hadCredAtStart = $true
+            Save-Config
             # 登录成功 → 立刻把联网缓存置为"已联网"，避免因旧缓存而重复登录
             $script:netCache = $true
             $script:netCacheAt = Get-Date
@@ -1037,12 +1134,9 @@ function Connect-Now {
             if ($form.Visible) { $hideTimer.Start() }
         } else {
             Set-Status ('✘ 连接失败：' + $r.msg) 'Red'
-            # 账号/密码错误 → 清空保存的密码，便于重新输入
+            # 账号/密码错误 → 保留原密码，只提示并聚焦密码框（不再清空保存的密码）
             if ($r.authfail) {
-                $script:cfg.passEnc = ''
-                Save-Config
-                Set-Status ('✘ 账号或密码错误，已清空保存的密码，请重新输入') 'Red'
-                Show-MainWindow
+                Set-Status '✘ 账号或密码错误，请检查后重试（已保留原保存的密码）' 'Red'
                 $txtPass.SelectAll(); $txtPass.Focus()
             } elseif ($r.msg -match '繁忙|稍后|请稍|too many|busy') {
                 Write-Log ('手动登录遇到服务器繁忙: ' + $r.msg)
@@ -1155,6 +1249,7 @@ function Monitor-Tick {
     }
     if (-not $chkAuto.Checked) { PollSlow; return }
     if ($script:busy) { return }
+    if ($script:authPaused) { PollSlow; return }    # 认证失败后暂停自动重试，等用户处理
 
     # ① 最快门：认证服务器 TCP 是否可达（约 20ms）
     #    不可达 = 网络还没准备好，快速重试（尽快抢到登录时机）
@@ -1205,10 +1300,9 @@ function Monitor-Tick {
             Set-Status ('✔ ' + (Get-Date).ToString('HH:mm:ss') + ' 自动重连成功') 'Green'
             if ($form.Visible) { $hideTimer.Start() }
         } elseif ($r.authfail) {
-            # 账号密码错误 → 清空保存的密码，并弹出窗口让人重新输入
-            $script:cfg.passEnc = ''
-            Save-Config
-            Set-Status '✘ 账号或密码错误，已清空保存的密码，请重新输入' 'Red'
+            # 账号密码错误 → 保留密码、暂停自动重试并弹窗，等用户检查后手动点「连接」
+            $script:authPaused = $true
+            Set-Status '✘ 账号或密码错误（已暂停自动重试，请检查后点「连接」）' 'Red'
             Show-MainWindow
             $txtPass.SelectAll(); $txtPass.Focus()
         } else {
@@ -1284,20 +1378,29 @@ $cmbTarget.EndUpdate()
 
 Write-Log '==== 程序启动 ===='
 
+# 启动自愈：把所有校园网 WiFi 配置批量设为"自动连接"，避免开机因手动模式连不上
+try { Repair-CampusProfilesAuto } catch {}
+
 # 后台监听"再次启动"信号 → 唤出窗口
 # 用 Timer 在主线程轮询信号（比跨线程 Invoke 更稳）
+$script:startedAt = Get-Date
 $showCheck = New-Object System.Windows.Forms.Timer
 $showCheck.Interval = 500
 $showCheck.Add_Tick({
     try {
         if ($script:showEvent.WaitOne(0)) {
-            Write-Log '收到唤起信号，显示窗口'
-            $script:form.Show()
-            $script:form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
-            $script:form.Activate()
-            $script:form.TopMost = $true
-            $script:form.TopMost = $false
-            $script:form.BringToFront()
+            # 开机头 8 秒内的"唤起"很可能是重复启动项竞争，忽略，避免莫名弹窗
+            if (((Get-Date) - $script:startedAt).TotalSeconds -lt 8) {
+                Write-Log '忽略开机初期的唤起信号（疑似重复启动）'
+            } else {
+                Write-Log '收到唤起信号，显示窗口'
+                $script:form.Show()
+                $script:form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+                $script:form.Activate()
+                $script:form.TopMost = $true
+                $script:form.TopMost = $false
+                $script:form.BringToFront()
+            }
         }
     } catch {}
 })
@@ -1325,6 +1428,7 @@ $tQuote.Start()
 # 没有/不完整 → 显示窗口让人填写
 $hasValidCred = (-not [string]::IsNullOrEmpty([string]$script:cfg.schoolId)) -and
                 (-not [string]::IsNullOrEmpty([string]$script:cfg.passEnc))
+$script:hadCredAtStart = $hasValidCred    # 记录"启动时是否已有可用账号密码"（用于首次登录自动开自启）
 
 if ($hasValidCred) {
     Write-Log '有已保存的账号密码 → 后台静默启动'
