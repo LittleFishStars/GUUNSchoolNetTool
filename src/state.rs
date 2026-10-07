@@ -30,6 +30,21 @@ pub struct Mismatch {
     pub target: String,
 }
 
+/// 自动更新的进展
+#[derive(Debug, Clone)]
+pub enum UpdateState {
+    /// 正在检查新版本
+    Checking,
+    /// 已有新版本可用（含下载地址与说明）
+    Available(crate::update::Update),
+    /// 正在下载（已下载字节, 总字节）
+    Downloading(u64, u64),
+    /// 已下载并替换完成，等待重启
+    Ready(String),
+    /// 出错
+    Failed(String),
+}
+
 /// 日志保留条数
 const MAX_LOGS: usize = 400;
 
@@ -67,6 +82,8 @@ pub struct Shared {
     pub save_requested: bool,
     /// 当前显示的每日名言（取自古文岛，失败时用内置文案）
     pub quote: String,
+    /// 自动更新的当前状态（`None` 表示尚未检查）
+    pub update: Option<UpdateState>,
     /// 运行日志（最新在末尾）
     pub logs: VecDeque<String>,
 }
@@ -91,6 +108,7 @@ impl Shared {
             mismatch: None,
             save_requested: false,
             quote: String::new(),
+            update: None,
             logs: VecDeque::new(),
         }
     }

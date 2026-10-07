@@ -131,10 +131,7 @@ pub fn internet_ok() -> bool {
 
 /// 发起一次 GET，返回状态码与响应体
 fn http_get(url: &str) -> Option<(u16, String)> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(HTTP_TIMEOUT))
-        .build()
-        .into();
+    let agent = crate::http::agent(HTTP_TIMEOUT);
     let mut resp = agent.get(url).call().ok()?;
     let status = resp.status().as_u16();
     let body = resp.body_mut().read_to_string().ok()?;

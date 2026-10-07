@@ -20,9 +20,6 @@ use serde::{Deserialize, Serialize};
 const MINGJU_URL: &str = "https://www.gushiwen.cn/mingjus/";
 /// 网络超时
 const TIMEOUT: Duration = Duration::from_secs(8);
-/// 部分站点会拒绝无 UA 的请求
-const USER_AGENT: &str =
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 /// 缓存文件名（与配置文件同目录）
 pub const CACHE_FILE: &str = "quote-cache.json";
 
@@ -136,13 +133,10 @@ fn pick(cache: &Cache) -> Quote {
 
 /// 抓取并解析古文岛名句列表
 pub fn fetch() -> Result<Vec<Quote>> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .timeout_global(Some(TIMEOUT))
-        .build()
-        .into();
+    let agent = crate::http::agent(TIMEOUT);
     let mut response = agent
         .get(MINGJU_URL)
-        .header("User-Agent", USER_AGENT)
+        .header("User-Agent", crate::http::BROWSER_UA)
         .call()
         .context("请求古文岛失败")?;
     let html = response

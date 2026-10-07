@@ -70,6 +70,8 @@ pub struct Config {
     pub switch_network: bool,
     /// 彻底退出时是否跳过确认框
     pub no_exit_confirm: bool,
+    /// 启动时自动检查新版本
+    pub auto_update: bool,
     /// 认证服务器地址
     pub portal_host: String,
     /// 认证服务器端口
@@ -90,6 +92,7 @@ impl Default for Config {
             target_ssid: String::new(),
             switch_network: true,
             no_exit_confirm: false,
+            auto_update: true,
             portal_host: "10.10.90.2".into(),
             portal_port: 801,
             ssid_keyword: "CMCC-GNNUN".into(),

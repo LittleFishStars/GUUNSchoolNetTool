@@ -14,6 +14,7 @@ mod autostart;
 mod config;
 mod dialogs;
 mod fonts;
+mod http;
 mod monitor;
 mod net;
 mod portal;
@@ -22,6 +23,7 @@ mod state;
 mod secret;
 mod tray;
 mod ui;
+mod update;
 
 use std::sync::{Arc, Mutex};
 

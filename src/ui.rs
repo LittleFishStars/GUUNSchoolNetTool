@@ -6,7 +6,12 @@
 use std::path::Path;
 
 use crate::config::{Carrier, Config};
-use crate::state::Level;
+use crate::state::{Level, UpdateState};
+
+/// 正常/成功色
+const OK_COLOR: egui::Color32 = egui::Color32::from_rgb(0x2e, 0xa0, 0x43);
+/// 失败色
+const ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(0xd0, 0x3a, 0x3a);
 
 /// 界面自身的临时状态（不写入配置文件，重启即复位）
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +55,8 @@ pub struct Snapshot<'a> {
     pub logs: &'a [String],
     /// 配置文件路径
     pub config_path: &'a Path,
+    /// 自动更新的当前状态
+    pub update: Option<&'a UpdateState>,
 }
 
 /// 用户在这一帧做出的操作
@@ -61,6 +68,10 @@ pub struct Actions {
     pub quit: bool,
     /// 点了「重新扫描」
     pub scan: bool,
+    /// 点了「检查更新」
+    pub check_update: bool,
+    /// 点了「立即更新」
+    pub apply_update: bool,
 }
 
 /// 画主界面，返回本帧的用户操作
@@ -86,6 +97,7 @@ pub fn draw(
     toggles(ui, cfg);
     target_network(ui, snapshot, cfg, &mut actions);
     control_buttons(ui, cfg, paused, ui_state, &mut actions);
+    update_banner(ui, snapshot, &mut actions);
     log_panel(ui, snapshot, ui_state);
     footer(ui, snapshot);
 
@@ -232,6 +244,12 @@ fn control_buttons(
                 state.confirming_exit = true;
             }
         }
+        if ui
+            .add_sized([96.0, 30.0], egui::Button::new("检查更新"))
+            .clicked()
+        {
+            actions.check_update = true;
+        }
     });
 }
 
@@ -251,6 +269,77 @@ fn log_panel(ui: &mut egui::Ui, snapshot: &Snapshot<'_>, state: &mut UiState) {
                 }
             });
     }
+}
+
+/// 自动更新提示：检查中 / 有新版本 / 下载进度 / 已就绪 / 失败
+fn update_banner(ui: &mut egui::Ui, snapshot: &Snapshot<'_>, actions: &mut Actions) {
+    let Some(state) = snapshot.update else {
+        return;
+    };
+    ui.add_space(6.0);
+    match state {
+        UpdateState::Checking => {
+            ui.label(egui::RichText::new("正在检查更新…").size(12.0).weak());
+        }
+        UpdateState::Available(info) => {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("发现新版本 v{}", info.version))
+                        .size(13.0)
+                        .color(OK_COLOR),
+                );
+                if ui.button("立即更新").clicked() {
+                    actions.apply_update = true;
+                }
+            });
+            if !info.notes.is_empty() {
+                ui.label(
+                    egui::RichText::new(first_lines(&info.notes, 3))
+                        .size(11.0)
+                        .weak(),
+                );
+            }
+        }
+        UpdateState::Downloading(done, total) => {
+            let text = if *total > 0 {
+                format!(
+                    "正在下载更新… {} / {} KB",
+                    done / 1024,
+                    total / 1024
+                )
+            } else {
+                format!("正在下载更新… {} KB", done / 1024)
+            };
+            ui.label(egui::RichText::new(text).size(12.0));
+            if *total > 0 {
+                let ratio = (*done as f32 / *total as f32).clamp(0.0, 1.0);
+                ui.add(egui::ProgressBar::new(ratio).desired_width(240.0));
+            }
+        }
+        UpdateState::Ready(version) => {
+            ui.label(
+                egui::RichText::new(format!("✔ 已更新到 v{version}，请重启程序生效"))
+                    .size(13.0)
+                    .color(OK_COLOR),
+            );
+        }
+        UpdateState::Failed(err) => {
+            ui.label(
+                egui::RichText::new(format!("✘ 更新失败：{err}"))
+                    .size(12.0)
+                    .color(ERROR_COLOR),
+            );
+        }
+    }
+}
+
+/// 取多行文本的前若干行（更新说明可能很长）
+fn first_lines(text: &str, count: usize) -> String {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(count)
+        .collect::<Vec<_>>()
+        .join("  ")
 }
 
 /// 底部：配置文件路径 + 每日名言
@@ -276,8 +365,8 @@ fn footer(ui: &mut egui::Ui, snapshot: &Snapshot<'_>) {
 fn level_color(level: Level) -> egui::Color32 {
     match level {
         Level::Info => egui::Color32::from_rgb(0x90, 0x90, 0x90),
-        Level::Ok => egui::Color32::from_rgb(0x2e, 0xa0, 0x43),
+        Level::Ok => OK_COLOR,
         Level::Warn => egui::Color32::from_rgb(0xd9, 0x7a, 0x0a),
-        Level::Error => egui::Color32::from_rgb(0xd0, 0x3a, 0x3a),
+        Level::Error => ERROR_COLOR,
     }
 }

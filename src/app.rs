@@ -12,7 +12,7 @@ use crate::dialogs::{self, ExitAnswer, MismatchAnswer};
 use crate::monitor;
 use crate::quotes;
 use crate::secret;
-use crate::state::{Mismatch, Shared, lock};
+use crate::state::{Mismatch, Shared, UpdateState, lock};
 use crate::ui::{self, Snapshot, UiState};
 
 /// 界面刷新间隔
@@ -40,6 +40,9 @@ impl App {
         sync_autostart(&shared);
         spawn_quote_fetch(shared.clone(), &config_path, cc.egui_ctx.clone());
 
+        if lock(&shared).cfg.auto_update {
+            spawn_update_check(shared.clone(), cc.egui_ctx.clone());
+        }
         let tray = crate::tray::spawn(shared.clone());
         if tray.is_some() {
             lock(&shared).log("系统托盘已启动");
@@ -186,7 +189,10 @@ impl eframe::App for App {
                 guard.quote.clone(),
             )
         };
-        let mismatch = lock(&self.shared).mismatch.clone();
+        let (mismatch, update) = {
+            let guard = lock(&self.shared);
+            (guard.mismatch.clone(), guard.update.clone())
+        };
         let snapshot = Snapshot {
             status: &status,
             level,
@@ -196,6 +202,7 @@ impl eframe::App for App {
             visible: &visible,
             logs: &logs,
             config_path: &self.config_path,
+            update: update.as_ref(),
         };
 
         // ② 画界面，拿回本帧的用户操作
@@ -222,6 +229,12 @@ impl eframe::App for App {
         crate::tray::poll(&mut self.tray, &self.shared);
         self.handle_show_window(&ctx);
         self.handle_save_request(&cfg, &password);
+        if actions.check_update {
+            spawn_update_check(self.shared.clone(), ctx.clone());
+        }
+        if actions.apply_update {
+            spawn_update_apply(self.shared.clone(), ctx.clone());
+        }
 
         let quit = actions.quit
             || self.handle_mismatch(&ctx, mismatch)
@@ -264,6 +277,72 @@ fn spawn_quote_fetch(shared: Arc<Mutex<Shared>>, config_path: &Path, ctx: egui::
         if let Some(message) = log {
             guard.log(message);
         }
+        drop(guard);
+        ctx.request_repaint();
+    });
+}
+
+/// 后台检查新版本（启动时与「检查更新」按钮共用）
+fn spawn_update_check(shared: Arc<Mutex<Shared>>, ctx: egui::Context) {
+    {
+        let mut guard = lock(&shared);
+        // 已有检查或下载在进行时不重复触发
+        if matches!(
+            guard.update,
+            Some(UpdateState::Checking | UpdateState::Downloading(..))
+        ) {
+            return;
+        }
+        guard.update = Some(UpdateState::Checking);
+    }
+    std::thread::spawn(move || {
+        let result = crate::update::check(env!("CARGO_PKG_VERSION"));
+        let mut guard = lock(&shared);
+        guard.update = match result {
+            Ok(Some(update)) => {
+                guard.log(format!("发现新版本 v{}", update.version));
+                Some(UpdateState::Available(update))
+            }
+            Ok(None) => {
+                guard.log("已是最新版本");
+                None
+            }
+            Err(err) => Some(UpdateState::Failed(err.to_string())),
+        };
+        drop(guard);
+        ctx.request_repaint();
+    });
+}
+
+/// 后台下载并替换可执行文件，完成后提示重启
+fn spawn_update_apply(shared: Arc<Mutex<Shared>>, ctx: egui::Context) {
+    let update = match lock(&shared).update.clone() {
+        Some(UpdateState::Available(update)) => update,
+        _ => return,
+    };
+    lock(&shared).update = Some(UpdateState::Downloading(0, update.size));
+
+    std::thread::spawn(move || {
+        let progress = {
+            let shared = shared.clone();
+            let ctx = ctx.clone();
+            move |done: u64, total: u64| {
+                lock(&shared).update = Some(UpdateState::Downloading(done, total));
+                ctx.request_repaint();
+            }
+        };
+        let result = crate::update::apply(&update, progress);
+        let mut guard = lock(&shared);
+        guard.update = Some(match result {
+            Ok(()) => {
+                guard.log(format!("已更新到 v{}，重启程序后生效", update.version));
+                UpdateState::Ready(update.version.clone())
+            }
+            Err(err) => {
+                guard.log(format!("更新失败：{err}"));
+                UpdateState::Failed(err.to_string())
+            }
+        });
         drop(guard);
         ctx.request_repaint();
     });
