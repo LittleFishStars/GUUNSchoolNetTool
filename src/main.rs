@@ -18,8 +18,10 @@ mod monitor;
 mod net;
 mod portal;
 mod quotes;
+mod state;
 mod secret;
 mod tray;
+mod ui;
 
 use std::sync::{Arc, Mutex};
 
@@ -27,7 +29,7 @@ fn main() -> eframe::Result {
     let path = config::config_path();
     let cfg = config::load(&path);
     let password = secret::unprotect(&cfg.pass_enc);
-    let shared = Arc::new(Mutex::new(monitor::Shared::new(cfg, password)));
+    let shared = Arc::new(Mutex::new(state::Shared::new(cfg, password)));
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

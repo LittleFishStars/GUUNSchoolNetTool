@@ -7,7 +7,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::monitor::{self, Shared};
+use crate::state::{Shared, lock};
 
 /// 托盘句柄；环境不支持时为 `None`
 pub struct Tray {
@@ -48,7 +48,7 @@ pub fn spawn(shared: Arc<Mutex<Shared>>) -> Option<Tray> {
 pub fn poll(tray: &mut Option<Tray>, shared: &Arc<Mutex<Shared>>) {
     #[cfg(target_os = "linux")]
     if let Some(tray) = tray {
-        let paused = monitor::lock(shared).paused;
+        let paused = lock(shared).paused;
         if tray.last_paused != paused {
             tray.last_paused = paused;
             // 让 ksni 重新拉取菜单，"暂停"的勾选状态才会跟上
@@ -58,7 +58,7 @@ pub fn poll(tray: &mut Option<Tray>, shared: &Arc<Mutex<Shared>>) {
     #[cfg(windows)]
     if let Some(tray) = tray {
         windows_impl::poll(&tray.inner, shared);
-        let paused = monitor::lock(shared).paused;
+        let paused = lock(shared).paused;
         if tray.inner.pause_item.is_checked() != paused {
             tray.inner.pause_item.set_checked(paused);
         }
@@ -93,7 +93,7 @@ impl ksni::Tray for LinuxTray {
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::*;
         let (status, paused) = {
-            let guard = monitor::lock(&self.shared);
+            let guard = lock(&self.shared);
             (guard.status.clone(), guard.paused)
         };
         vec![
@@ -107,7 +107,7 @@ impl ksni::Tray for LinuxTray {
             StandardItem {
                 label: "显示窗口".into(),
                 activate: Box::new(|tray: &mut Self| {
-                    monitor::lock(&tray.shared).show_window = true;
+                    lock(&tray.shared).show_window = true;
                 }),
                 ..Default::default()
             }
@@ -116,7 +116,7 @@ impl ksni::Tray for LinuxTray {
                 label: "暂停自动连接".into(),
                 checked: paused,
                 activate: Box::new(|tray: &mut Self| {
-                    let mut guard = monitor::lock(&tray.shared);
+                    let mut guard = lock(&tray.shared);
                     guard.paused = !guard.paused;
                 }),
                 ..Default::default()
@@ -126,7 +126,7 @@ impl ksni::Tray for LinuxTray {
             StandardItem {
                 label: "彻底退出".into(),
                 activate: Box::new(|tray: &mut Self| {
-                    monitor::lock(&tray.shared).quit = true;
+                    lock(&tray.shared).quit = true;
                 }),
                 ..Default::default()
             }
@@ -151,7 +151,7 @@ mod windows_impl {
     }
 
     pub fn spawn(shared: Arc<Mutex<Shared>>) -> Option<WindowsTray> {
-        let paused = monitor::lock(&shared).paused;
+        let paused = lock(&shared).paused;
         let show_item = MenuItem::new("显示窗口", true, None);
         let pause_item = CheckMenuItem::new("暂停自动连接", true, paused, None);
         let quit_item = MenuItem::new("彻底退出", true, None);
@@ -178,12 +178,12 @@ mod windows_impl {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             let id = event.id();
             if id == tray.show_item.id() {
-                monitor::lock(shared).show_window = true;
+                lock(shared).show_window = true;
             } else if id == tray.pause_item.id() {
-                let mut guard = monitor::lock(shared);
+                let mut guard = lock(shared);
                 guard.paused = !guard.paused;
             } else if id == tray.quit_item.id() {
-                monitor::lock(shared).quit = true;
+                lock(shared).quit = true;
             }
         }
     }
