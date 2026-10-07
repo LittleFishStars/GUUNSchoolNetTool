@@ -51,6 +51,22 @@ impl App {
                 ));
             }
         }
+        // 后台获取每日名言（古文岛），不阻塞界面启动
+        {
+            let shared = shared.clone();
+            let ctx = cc.egui_ctx.clone();
+            let cache_path = config_path.with_file_name(crate::quotes::CACHE_FILE);
+            std::thread::spawn(move || {
+                let (text, log) = crate::quotes::load_daily(&cache_path);
+                let mut guard = lock(&shared);
+                guard.quote = text;
+                if let Some(message) = log {
+                    guard.log(message);
+                }
+                drop(guard);
+                ctx.request_repaint();
+            });
+        }
         let tray = crate::tray::spawn(shared.clone());
         if tray.is_some() {
             let mut guard = lock(&shared);
@@ -92,7 +108,7 @@ impl eframe::App for App {
         // 定时刷新，让后台状态变化能反映到界面
         ctx.request_repaint_after(Duration::from_millis(400));
 
-        let (mut cfg, mut password, status, level, mut paused, logs, saved, visible, ssid, mismatch) = {
+        let (mut cfg, mut password, status, level, mut paused, logs, saved, visible, ssid, mismatch, quote) = {
             let guard = lock(&self.shared);
             (
                 guard.cfg.clone(),
@@ -105,6 +121,7 @@ impl eframe::App for App {
                 guard.visible.clone(),
                 guard.ssid.clone(),
                 guard.mismatch.clone(),
+                guard.quote.clone(),
             )
         };
         let mut show_logs = self.show_logs;
@@ -263,13 +280,15 @@ impl eframe::App for App {
                     .size(11.0)
                     .weak(),
             );
-            ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(crate::quotes::today())
-                    .italics()
-                    .size(12.0)
-                    .color(egui::Color32::from_rgb(120, 90, 30)),
-            );
+            if !quote.is_empty() {
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(&quote)
+                        .italics()
+                        .size(12.0)
+                        .color(egui::Color32::from_rgb(120, 90, 30)),
+                );
+            }
         });
 
         let boot_changed = {

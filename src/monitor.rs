@@ -56,6 +56,8 @@ pub struct Shared {
     pub mismatch: Option<Mismatch>,
     /// 请求界面把配置写回磁盘（例如首次登录自动开启了开机自启）
     pub save_requested: bool,
+    /// 当前显示的每日名言（取自古文岛，失败时用内置文案）
+    pub quote: String,
     /// 运行日志（最新在末尾）
     pub logs: VecDeque<String>,
 }
@@ -88,6 +90,7 @@ impl Shared {
             saved: Vec::new(),
             mismatch: None,
             save_requested: false,
+            quote: String::new(),
             logs: VecDeque::new(),
         }
     }
