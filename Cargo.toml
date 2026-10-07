@@ -1,6 +1,6 @@
 [package]
 name = "guunnet"
-version = "1.2.0"
+version = "1.2.1"
 description = "赣南师范大学校园网自动登录工具（Rust + egui 跨平台版）"
 edition = "2024"
 
