@@ -10,3 +10,8 @@ GUUNNet-Silent.vbs
 
 # 打包产物
 *.exe
+
+# Rust 版构建产物与依赖缓存
+rust/target/
+rust/.cargo-home/
+rust/.rustup-home/
