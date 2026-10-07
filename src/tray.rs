@@ -190,7 +190,7 @@ mod windows_impl {
 
     /// 从仓库自带的 icon.ico 解码托盘图标
     fn load_icon() -> Option<Icon> {
-        const ICO: &[u8] = include_bytes!("../../icon.ico");
+        const ICO: &[u8] = include_bytes!("../icon.ico");
         let image = image::load_from_memory_with_format(ICO, image::ImageFormat::Ico).ok()?;
         let rgba = image.to_rgba8();
         let (width, height) = rgba.dimensions();
