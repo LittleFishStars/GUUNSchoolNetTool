@@ -6,18 +6,23 @@
 > 本目录是 `master` 分支 `main.py`（Python/Tkinter）与 PR #2 `powershell/GUUNNet.ps1`
 > （PowerShell/WinForms）之后的新技术栈实现，功能以 PowerShell 版 v1.0.6 为基准。
 
-## 功能（核心）
+## 功能
 
 - **自动登录**：ePortal 认证，支持 电信(`@dx`) / 移动(无后缀) / 联通(`@lt`)
 - **断线自动重连**：网络恢复或休眠唤醒后自动重新登录
 - **自适应轮询**：需要登录时 2 秒一次，稳定在线时 10 秒一次（省电）
-- **指数退避**：连续失败按 3s → 6s → 12s → 24s → 60s 递增，避免猛敲认证服务器
+- **指数退避**：连续失败按 3s → 6s → 12s → 24s → 48s 递增，避免猛敲认证服务器
 - **目标网络**：可指定固定连接的 WiFi；目标不在附近时不会抢网
 - **暂停 / 继续**：临时停止检测与自动登录
 - **记住密码**：Windows 用 DPAPI 加密（仅当前用户可解密），其他平台为 base64 混淆
 - **门户优先探测**：先测认证服务器 TCP 是否可达，避免"无法连接到远程服务器"
 - **运行日志**：界面内实时查看，含每次登录的账号、运营商与响应消息
 - **系统托盘**：显示窗口 / 暂停继续 / 彻底退出；Linux 走 StatusNotifierItem（无 SNI 宿主时自动降级为无托盘，不影响主程序）
+- **WiFi 自愈**：启动与切换网络时自动把校园网配置设为「自动连接」，修复开机不自动连校园网
+- **开机自动启动**：勾选即写入系统（Windows 注册表 / Linux XDG Autostart）；首次登录成功会自动开启
+- **每日名言**：底部按日轮换（与 PowerShell 版同一套文案）
+- **不符提示**：连的网络不是目标网且目标不在附近时弹窗，可选 暂停 / 忽略 / 彻底关闭
+- **彻底关闭确认**：退出前确认，可勾选「不再提示」
 
 ## 与 PowerShell 版的差异
 
@@ -25,11 +30,11 @@
 | --- | --- | --- |
 | 运行环境 | Windows + PowerShell 5.1 | Windows / Linux，单文件可执行 |
 | 密码保护 | DPAPI | Windows DPAPI；其他平台 base64 混淆 |
-| WiFi 自愈（设为自动连接） | 支持 | 暂未实现 |
+| WiFi 自愈（设为自动连接） | 支持 | 支持（`netsh wlan set profileparameter` / `nmcli connection modify`） |
 | 系统托盘 | 支持 | 支持（Windows 用 `tray-icon`，Linux 用 `ksni`/SNI） |
-| 每日名言 | 支持 | 暂未实现 |
-| 开机自启 | 支持 | Windows 上界面已预留开关，暂未接线 |
-| 网络与目标不符弹窗 | 支持 | 状态栏提示，不弹窗 |
+| 每日名言 | 支持 | 支持（30 条同款文案，按日轮换） |
+| 开机自启 | 支持 | 支持（Windows 注册表 / Linux XDG Autostart，用 `auto-launch`） |
+| 网络与目标不符弹窗 | 支持 | 支持（egui 模态框：暂停 / 忽略 / 彻底关闭） |
 
 ## 构建与运行
 
@@ -37,7 +42,7 @@
 cd rust
 cargo run --release          # 直接运行
 cargo build --release        # 产物在 target/release/guunnet
-cargo test                   # 运行单元测试（协议解析、退避策略）
+cargo test                   # 运行单元测试（协议解析、退避策略、名言轮换）
 ```
 
 Linux 需要 `nmcli`（NetworkManager）读取与切换 WiFi：

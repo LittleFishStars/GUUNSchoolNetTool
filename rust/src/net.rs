@@ -195,10 +195,13 @@ pub fn visible_ssids(rescan: bool) -> Vec<String> {
 }
 
 /// 连接到指定 WiFi（需要系统已保存该网络的配置）
+///
+/// 连接前会先把该配置自愈为「自动连接」，顺带修复开机不自动连校园网的问题。
 pub fn connect_ssid(ssid: &str) -> bool {
     if ssid.is_empty() {
         return false;
     }
+    set_profile_auto(ssid);
     #[cfg(target_os = "linux")]
     {
         // 优先启用已保存的连接；否则现场连接
@@ -216,4 +219,102 @@ pub fn connect_ssid(ssid: &str) -> bool {
     {
         false
     }
+}
+
+/// 系统已保存的 WiFi 名称。
+///
+/// 只有已保存的网络才能作为自动连接目标：未保存的网络连接需要密码，
+/// 系统也不会记住它，自动切过去没有意义。
+pub fn saved_ssids() -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    #[cfg(target_os = "linux")]
+    if let Some(out) = run("nmcli", &["-t", "-f", "NAME,TYPE", "connection", "show"]) {
+        for line in out.lines() {
+            // 形如 "CMCC-GNNUN:802-11-wireless"；名称可能含冒号，故从右侧切分
+            if let Some((name, kind)) = line.rsplit_once(':')
+                && kind.trim() == "802-11-wireless"
+            {
+                let name = name.trim();
+                if !name.is_empty() {
+                    names.push(name.to_string());
+                }
+            }
+        }
+    }
+    #[cfg(windows)]
+    if let Some(out) = netsh(&["wlan", "show", "profiles"]) {
+        for line in out.lines() {
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
+            let key = key.trim();
+            // 中英文系统的行首分别是「所有用户配置文件」「All User Profile」
+            if !(key.contains("配置文件") || key.contains("Profile")) {
+                continue;
+            }
+            let name = value.trim();
+            if !name.is_empty() {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// 把某个 WiFi 配置设为「自动连接」。
+///
+/// 校园网配置常是「手动连接」，会导致开机后系统不主动连校园网；
+/// 这里顺手纠正，返回是否成功。
+pub fn set_profile_auto(ssid: &str) -> bool {
+    if ssid.is_empty() {
+        return false;
+    }
+    // 名称里的半角双引号会破坏命令行参数，直接剔除
+    let safe = ssid.replace('"', "");
+    #[cfg(target_os = "linux")]
+    {
+        run(
+            "nmcli",
+            &[
+                "connection",
+                "modify",
+                safe.as_str(),
+                "connection.autoconnect",
+                "yes",
+            ],
+        )
+        .is_some()
+    }
+    #[cfg(windows)]
+    {
+        let arg = format!("name=\"{safe}\"");
+        netsh(
+            &[
+                "wlan",
+                "set",
+                "profileparameter",
+                arg.as_str(),
+                "connectionmode=auto",
+            ],
+        )
+        .is_some()
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = safe;
+        false
+    }
+}
+
+/// 把所有名称含 `keyword` 的已保存配置批量设为「自动连接」，返回处理数量。
+pub fn repair_profiles_auto(keyword: &str) -> usize {
+    let mut fixed = 0;
+    for name in saved_ssids() {
+        if name.contains(keyword) && set_profile_auto(&name) {
+            fixed += 1;
+        }
+    }
+    fixed
 }

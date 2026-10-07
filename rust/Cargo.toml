@@ -6,6 +6,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+auto-launch = "0.6.0"
 base64 = "0.23.1"
 chrono = "0.4.45"
 directories = "6.0.0"

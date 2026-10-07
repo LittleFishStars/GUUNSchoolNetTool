@@ -50,8 +50,23 @@ pub struct Shared {
     pub ssid: String,
     /// 最近一次扫描到的 WiFi 列表
     pub visible: Vec<String>,
+    /// 系统已保存的 WiFi 列表（只有已保存的才能作自动连接目标）
+    pub saved: Vec<String>,
+    /// 待用户处理的「网络与目标不符」提示
+    pub mismatch: Option<Mismatch>,
+    /// 请求界面把配置写回磁盘（例如首次登录自动开启了开机自启）
+    pub save_requested: bool,
     /// 运行日志（最新在末尾）
     pub logs: VecDeque<String>,
+}
+
+/// 「网络与目标不符」的一次提示
+#[derive(Debug, Clone)]
+pub struct Mismatch {
+    /// 当前连接的网络
+    pub current: String,
+    /// 配置里设定的目标网络
+    pub target: String,
 }
 
 impl Shared {
@@ -70,6 +85,9 @@ impl Shared {
             last_success: None,
             ssid: String::new(),
             visible: Vec::new(),
+            saved: Vec::new(),
+            mismatch: None,
+            save_requested: false,
             logs: VecDeque::new(),
         }
     }
@@ -125,6 +143,12 @@ struct Monitor {
     net_cache: Option<(bool, Instant)>,
     last_switch: Option<Instant>,
     visible_cache: Option<(Vec<String>, Instant)>,
+    /// 「网络与目标不符」提示是否已弹过（同一网络只弹一次）
+    mismatch_prompted: bool,
+    /// 上次弹提示时的网络名
+    mismatch_last_ssid: String,
+    /// 启动时是否已有可用账号密码（用于「首次登录自动开启自启」）
+    had_cred: bool,
 }
 
 impl Monitor {
@@ -139,6 +163,9 @@ impl Monitor {
             net_cache: None,
             last_switch: None,
             visible_cache: None,
+            mismatch_prompted: false,
+            mismatch_last_ssid: String::new(),
+            had_cred: true, // 由 spawn 按启动时的实际情况覆盖
         }
     }
 
@@ -197,6 +224,10 @@ impl Monitor {
         let cfg = update(shared, |s| s.cfg.clone());
         let ssid = self.stable_ssid();
         update(shared, |s| s.ssid = display_ssid(&ssid));
+        // 网络变了 → 允许重新弹一次「目标不符」提示
+        if ssid != self.mismatch_last_ssid {
+            self.mismatch_prompted = false;
+        }
 
         // 设了目标网络但当前不在其上
         if !cfg.target_ssid.is_empty() && ssid != cfg.target_ssid {
@@ -296,6 +327,18 @@ impl Monitor {
             }
         });
         self.interval = POLL_SLOW;
+        // 当前有网络、目标是别的且不在附近 → 提示一次（暂停 / 忽略 / 彻底关闭）
+        if !ssid.is_empty() && !self.mismatch_prompted {
+            self.mismatch_prompted = true;
+            self.mismatch_last_ssid = ssid.to_string();
+            update(shared, |s| {
+                s.log(format!("提示：当前「{current}」≠ 目标「{target}」且目标不在附近"));
+                s.mismatch = Some(Mismatch {
+                    current: current.clone(),
+                    target: target.clone(),
+                });
+            });
+        }
     }
 
     /// 执行一次登录
@@ -330,6 +373,7 @@ impl Monitor {
                 s.last_success = Some(at.clone());
                 s.set_status(Level::Ok, format!("✔ {at} 连接成功 · {msg}"));
             });
+            self.apply_first_login_autostart(shared);
         } else {
             self.fail_count = self.fail_count.saturating_add(1);
             update(shared, |s| {
@@ -400,11 +444,38 @@ impl Monitor {
 
     /// 界面点「重新扫描」
     fn scan(&mut self, shared: &Arc<Mutex<Shared>>) {
+        let saved = net::saved_ssids();
         let list = self.visible_cached(true);
         update(shared, |s| {
-            s.log(format!("扫描到 {} 个 WiFi", list.len()));
+            s.log(format!(
+                "扫描到 {} 个 WiFi（已保存 {} 个）",
+                list.len(),
+                saved.len()
+            ));
             s.visible = list;
+            s.saved = saved;
         });
+    }
+
+    /// 首次登录成功时自动开启开机自启（免除用户手动勾选）
+    fn apply_first_login_autostart(&mut self, shared: &Arc<Mutex<Shared>>) {
+        if self.had_cred {
+            return;
+        }
+        self.had_cred = true;
+        if update(shared, |s| s.cfg.boot) {
+            return;
+        }
+        match crate::autostart::set_enabled(true) {
+            Ok(()) => update(shared, |s| {
+                s.cfg.boot = true;
+                s.save_requested = true;
+                s.log("首次登录成功 → 已自动开启「开机自动启动」");
+            }),
+            Err(err) => update(shared, |s| {
+                s.log(format!("自动开启开机自启失败：{err}"));
+            }),
+        }
     }
 }
 
@@ -412,6 +483,21 @@ impl Monitor {
 pub fn spawn(shared: Arc<Mutex<Shared>>, ctx: egui::Context) {
     std::thread::spawn(move || {
         let mut monitor = Monitor::new();
+        // 记录启动时是否已有可用账号密码（供「首次登录自动开启自启」判断）
+        monitor.had_cred = update(&shared, |s| {
+            !s.cfg.school_id.is_empty() && !s.password.is_empty()
+        });
+        // 启动自愈：把校园网配置批量设为「自动连接」，避免开机连不上校园网
+        let keyword = update(&shared, |s| s.cfg.ssid_keyword.clone());
+        let fixed = net::repair_profiles_auto(&keyword);
+        if fixed > 0 {
+            update(&shared, |s| {
+                s.log(format!("启动自愈：已将 {fixed} 个校园网配置设为自动连接"));
+            });
+        }
+        // 先填一次已保存列表（不强制扫描，避免拖慢启动）
+        let saved = net::saved_ssids();
+        update(&shared, |s| s.saved = saved);
         loop {
             let (quit, manual, scan) = update(&shared, |s| {
                 let flags = (s.quit, s.manual_connect, s.scan_requested);

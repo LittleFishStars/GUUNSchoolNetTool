@@ -7,11 +7,14 @@
 //! - 其他平台使用 base64 混淆与 NetworkManager(`nmcli`) 实现同等能力。
 
 mod app;
+mod autostart;
 mod config;
+mod dialogs;
 mod fonts;
 mod monitor;
 mod net;
 mod portal;
+mod quotes;
 mod secret;
 mod tray;
 
