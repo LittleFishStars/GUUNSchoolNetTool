@@ -14,6 +14,8 @@ pub struct App {
     config_path: PathBuf,
     show_logs: bool,
     password_visible: bool,
+    /// 系统托盘（环境不支持时为 None）
+    tray: Option<crate::tray::Tray>,
 }
 
 impl App {
@@ -32,11 +34,17 @@ impl App {
                 None => guard.log("警告：未找到系统中文字体，界面中文可能显示为方框"),
             }
         }
+        let tray = crate::tray::spawn(shared.clone());
+        if tray.is_some() {
+            let mut guard = lock(&shared);
+            guard.log("系统托盘已启动");
+        }
         Self {
             shared,
             config_path,
             show_logs: true,
             password_visible: false,
+            tray,
         }
     }
 
@@ -222,6 +230,17 @@ impl eframe::App for App {
                 guard.manual_connect = true;
             }
         }
+        // 处理托盘交互（Windows 下需在界面循环里轮询菜单事件）
+        crate::tray::poll(&mut self.tray, &self.shared);
+        // 托盘请求显示窗口 → 把窗口提到前台
+        let show_window = {
+            let mut guard = lock(&self.shared);
+            std::mem::take(&mut guard.show_window)
+        };
+        if show_window {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
         self.show_logs = show_logs;
         self.password_visible = password_visible;
         if save {
@@ -229,6 +248,7 @@ impl eframe::App for App {
         }
         if quit {
             lock(&self.shared).quit = true;
+            self.tray = None; // 关闭托盘图标
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -246,8 +266,5 @@ fn level_color(level: Level) -> egui::Color32 {
 
 /// 加锁读取共享状态；锁中毒时照常取用
 fn lock(shared: &Arc<Mutex<Shared>>) -> std::sync::MutexGuard<'_, Shared> {
-    match shared.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
+    monitor::lock(shared)
 }

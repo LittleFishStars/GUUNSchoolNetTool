@@ -13,6 +13,7 @@ mod monitor;
 mod net;
 mod portal;
 mod secret;
+mod tray;
 
 use std::sync::{Arc, Mutex};
 

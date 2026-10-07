@@ -40,6 +40,8 @@ pub struct Shared {
     pub quit: bool,
     /// 界面请求立即登录一次
     pub manual_connect: bool,
+    /// 托盘请求显示窗口
+    pub show_window: bool,
     /// 界面请求重新扫描 WiFi
     pub scan_requested: bool,
     /// 最近一次成功连接的时间文本
@@ -63,6 +65,7 @@ impl Shared {
             paused: false,
             quit: false,
             manual_connect: false,
+            show_window: false,
             scan_requested: false,
             last_success: None,
             ssid: String::new(),
@@ -440,6 +443,14 @@ pub fn spawn(shared: Arc<Mutex<Shared>>, ctx: egui::Context) {
             std::thread::sleep(HEARTBEAT);
         }
     });
+}
+
+/// 加锁读取共享状态；锁中毒时照常取用
+pub fn lock(shared: &Arc<Mutex<Shared>>) -> std::sync::MutexGuard<'_, Shared> {
+    match shared.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
 }
 
 /// 在锁内修改共享状态；锁中毒时也能继续工作
