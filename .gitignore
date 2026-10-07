@@ -4,3 +4,7 @@
 /target/
 /.cargo-home/
 /.rustup-home/
+
+# 交叉编译用的 mingw 工具链与安装包（本地临时，不入库）
+/.mingw/
+/.mingw-pkgs/

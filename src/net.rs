@@ -156,6 +156,9 @@ pub fn current_ssid() -> String {
 /// 附近可见的 WiFi 名称（去重排序）。`rescan` 为真时强制重新扫描（较慢）。
 pub fn visible_ssids(rescan: bool) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
+    // Windows 的 netsh 没有强制扫描开关，该参数只对 Linux 的 nmcli 有意义
+    #[cfg(not(target_os = "linux"))]
+    let _ = rescan;
     #[cfg(target_os = "linux")]
     {
         let mut args = vec!["-t", "-f", "SSID", "dev", "wifi", "list"];
