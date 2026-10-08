@@ -60,6 +60,36 @@ sudo pacman -S networkmanager   # 已安装可忽略
 
 Windows 直接 `cargo build --release` 即可，无额外系统依赖（WiFi 走系统自带 `netsh`）。
 
+## 图标
+
+三处图标同一来源，不会各用各的：
+
+| 位置 | 图标来源 |
+| --- | --- |
+| 应用窗口 | `assets/icon-256.png`（X11 下由窗口管理器显示；Wayland 看 `.desktop`） |
+| Windows 托盘 | `assets/icon-32.png` |
+| Linux 托盘（SNI） | `assets/icon-22.png` 与 `icon-48.png`，走 `IconPixmap`，**不再用系统主题图标** |
+
+`icon.svg` 是矢量源；`assets/icon-*.png` 由它预渲染而来，编译期用 `include_bytes!`
+嵌进二进制（见 `src/icon.rs`），因此运行时不需要 SVG 渲染库，也不依赖系统图标主题。
+改图标只需替换 `icon.svg` 后重新渲染：
+
+```bash
+for s in 16 22 24 32 48 64 128 256; do rsvg-convert -w $s -h $s icon.svg -o assets/icon-$s.png; done
+```
+
+Wayland 下窗口图标不由程序决定，而要合成器按 `app_id`（程序里固定为 `guunnet`）
+去匹配 `.desktop` 文件；想让它生效就装上仓库提供的这两份：
+
+```bash
+install -Dm644 assets/icon-256.png ~/.local/share/icons/hicolor/256x256/apps/guunnet.png
+install -Dm644 packaging/guunnet.desktop ~/.local/share/applications/guunnet.desktop
+```
+
+Windows 的 exe 文件图标由 `build.rs` 用 `winresource` 从 `icon.ico` 嵌进去，
+这样资源管理器、任务栏、Alt+Tab 与托盘也全是同一个图标；交叉编译时记得把
+mingw 的 bin 目录加进 `PATH`（才有 `windres`），找不到只会打警告、不影响构建。
+
 ## 配置文件
 
 查找顺序：

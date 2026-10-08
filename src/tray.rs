@@ -86,8 +86,22 @@ impl ksni::Tray for LinuxTray {
     }
 
     fn icon_name(&self) -> String {
-        // 用系统主题图标，免去额外打包图片资源
-        "network-wireless".into()
+        // 图标走 IconPixmap（自带资源），不在系统主题里找，避免与其他图标不一致
+        String::new()
+    }
+
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        // 常规与 HiDPI 两档，由面板自己挑；解码结果缓存起来反复取用
+        static PIXELS: std::sync::OnceLock<Vec<(Vec<u8>, u32, u32)>> = std::sync::OnceLock::new();
+        PIXELS
+            .get_or_init(|| crate::icon::tray_argb32(&[22, 48]))
+            .iter()
+            .map(|(data, width, height)| ksni::Icon {
+                width: *width as i32,
+                height: *height as i32,
+                data: data.clone(),
+            })
+            .collect()
     }
 
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
@@ -188,12 +202,9 @@ mod windows_impl {
         }
     }
 
-    /// 从仓库自带的 icon.ico 解码托盘图标
+    /// Windows 托盘图标：与窗口图标同源（assets/ 里的预渲染 PNG）
     fn load_icon() -> Option<Icon> {
-        const ICO: &[u8] = include_bytes!("../icon.ico");
-        let image = image::load_from_memory_with_format(ICO, image::ImageFormat::Ico).ok()?;
-        let rgba = image.to_rgba8();
-        let (width, height) = rgba.dimensions();
-        Icon::from_rgba(rgba.into_raw(), width, height).ok()
+        let (rgba, width, height) = crate::icon::rgba(32)?;
+        Icon::from_rgba(rgba, width, height).ok()
     }
 }

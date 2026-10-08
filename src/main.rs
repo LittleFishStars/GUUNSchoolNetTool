@@ -15,6 +15,7 @@ mod config;
 mod dialogs;
 mod fonts;
 mod http;
+mod icon;
 mod monitor;
 mod net;
 mod portal;
@@ -43,11 +44,17 @@ fn main() -> eframe::Result {
     let password = secret::unprotect(&cfg.pass_enc);
     let shared = Arc::new(Mutex::new(state::Shared::new(cfg, password)));
 
+    // 窗口图标与托盘图标同源（Wayland 下窗口图标由 .desktop 的 Icon 决定）
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([500.0, 620.0])
+        .with_min_inner_size([440.0, 520.0])
+        .with_app_id("guunnet")
+        .with_title("校园网自连");
+    if let Some(icon) = icon::window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([500.0, 620.0])
-            .with_min_inner_size([440.0, 520.0])
-            .with_title("校园网自连"),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
