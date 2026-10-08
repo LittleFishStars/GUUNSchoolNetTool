@@ -3,6 +3,7 @@
 //! 界面绘制在 [`crate::ui`]，监控逻辑在 [`crate::monitor`]；
 //! 这里只做「取快照 → 画界面 → 写回结果」的编排。
 
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -26,6 +27,8 @@ pub struct App {
     ui_state: UiState,
     /// 系统托盘（环境不支持时为 None）
     tray: Option<crate::tray::Tray>,
+    /// 是否已经请求退出（避免重复发送关闭命令）
+    quitting: bool,
 }
 
 impl App {
@@ -33,9 +36,14 @@ impl App {
     pub fn new(
         shared: Arc<Mutex<Shared>>,
         config_path: PathBuf,
+        single: Option<TcpListener>,
         cc: &eframe::CreationContext<'_>,
     ) -> Self {
         monitor::spawn(shared.clone(), cc.egui_ctx.clone());
+        // 唯一实例：常驻监听后续启动请求，收到就把窗口唤到前台
+        if let Some(listener) = single {
+            crate::single::watch(listener, shared.clone(), cc.egui_ctx.clone());
+        }
         install_font(&shared, cc);
         sync_autostart(&shared);
         spawn_quote_fetch(shared.clone(), &config_path, cc.egui_ctx.clone());
@@ -52,6 +60,7 @@ impl App {
             config_path,
             ui_state: UiState::default(),
             tray,
+            quitting: false,
         }
     }
 
@@ -104,15 +113,27 @@ impl App {
         if !std::mem::take(&mut lock(&self.shared).show_window) {
             return;
         }
-        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        crate::single::show_window(ctx);
     }
 
-    /// 后台请求保存配置（例如首次登录自动开启了开机自启）
-    fn handle_save_request(&self, cfg: &Config, password: &str) {
-        if std::mem::take(&mut lock(&self.shared).save_requested) {
-            self.save_config(cfg, password);
+    /// 点「连接」后把窗口收起来：进程继续在后台自动登录与断线重连，
+    /// 需要看界面时点托盘图标，或再次双击程序（会被已有实例唤出）。
+    fn hide_window(&self, ctx: &egui::Context) {
+        lock(&self.shared).log("已开始连接，窗口收起到后台（托盘菜单或再次双击程序可唤出）");
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+    }
+
+    /// 后台请求保存配置（例如首次登录自动开启了开机自启）。
+    /// 数据直接取自共享状态，窗口隐藏、界面不运行时也能落盘。
+    fn handle_save_request(&self) {
+        if !std::mem::take(&mut lock(&self.shared).save_requested) {
+            return;
         }
+        let (cfg, password) = {
+            let guard = lock(&self.shared);
+            (guard.cfg.clone(), guard.password.clone())
+        };
+        self.save_config(&cfg, &password);
     }
 
     /// 「网络与目标不符」提示框；返回用户是否选择了「彻底关闭」
@@ -162,6 +183,10 @@ impl App {
 
     /// 真正退出：停掉托盘并关闭窗口
     fn shutdown(&mut self, ctx: &egui::Context) {
+        if self.quitting {
+            return;
+        }
+        self.quitting = true;
         lock(&self.shared).quit = true;
         self.tray = None;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -169,6 +194,18 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// 窗口隐藏时 eframe 不运行界面、只调用本方法：托盘菜单、唤起窗口、
+    /// 保存配置与退出请求都要在这里响应，否则收起窗口后托盘会失灵。
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        crate::tray::poll(&mut self.tray, &self.shared);
+        self.handle_show_window(ctx);
+        self.handle_save_request();
+        // 托盘的「彻底退出」只置标志位，真正关闭在这里完成
+        if lock(&self.shared).quit {
+            self.shutdown(ctx);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         ctx.request_repaint_after(REFRESH);
@@ -225,10 +262,9 @@ impl eframe::App for App {
         }
         if actions.connect {
             self.save_config(&cfg, &password);
+            // 点「连接」后立即把窗口收起来，登录与重连交给后台线程
+            self.hide_window(&ctx);
         }
-        crate::tray::poll(&mut self.tray, &self.shared);
-        self.handle_show_window(&ctx);
-        self.handle_save_request(&cfg, &password);
         if actions.check_update {
             spawn_update_check(self.shared.clone(), ctx.clone());
         }

@@ -21,6 +21,7 @@ mod portal;
 mod quotes;
 mod state;
 mod secret;
+mod single;
 mod tray;
 mod ui;
 mod update;
@@ -29,6 +30,15 @@ use std::sync::{Arc, Mutex};
 
 fn main() -> eframe::Result {
     let path = config::config_path();
+
+    // 重复启动时只唤出已有窗口：既避免出现多个窗口，
+    // 也避免两套后台线程同时抢着登录而互相打架
+    let instance = match single::start(&path) {
+        single::Startup::Primary(listener) => Some(listener),
+        single::Startup::AlreadyRunning => return Ok(()),
+        single::Startup::NoProtection => None,
+    };
+
     let cfg = config::load(&path);
     let password = secret::unprotect(&cfg.pass_enc);
     let shared = Arc::new(Mutex::new(state::Shared::new(cfg, password)));
@@ -43,6 +53,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "校园网自连",
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(shared, path, cc)))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(shared, path, instance, cc)))),
     )
 }

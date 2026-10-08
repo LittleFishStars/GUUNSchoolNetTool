@@ -62,7 +62,7 @@ pub struct Snapshot<'a> {
 /// 用户在这一帧做出的操作
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Actions {
-    /// 点了「连接」
+    /// 点了「连接」（连接后窗口会自动收起，见 [`crate::app`]）
     pub connect: bool,
     /// 点了「彻底退出」
     pub quit: bool,
@@ -222,6 +222,7 @@ fn control_buttons(
     ui.horizontal(|ui| {
         if ui
             .add_sized([96.0, 30.0], egui::Button::new("连接"))
+            .on_hover_text("点击后窗口自动收起，登录与断线重连在后台继续；再双击程序可唤出窗口")
             .clicked()
         {
             actions.connect = true;
